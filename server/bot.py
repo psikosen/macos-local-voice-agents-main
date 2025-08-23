@@ -1,9 +1,12 @@
 import argparse
 import asyncio
+import json
 import os
 import sys
 from contextlib import asynccontextmanager
-from typing import Dict
+from datetime import datetime
+from typing import Dict, Optional
+import inspect
 
 # Add local pipecat to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "pipecat", "src"))
@@ -11,7 +14,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "pipecat", "src"))
 from kokoro_tts import KokoroTTSService
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    UploadFile,
+    Response,
+)
 from loguru import logger
 
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
@@ -38,6 +49,27 @@ load_dotenv(override=True)
 app = FastAPI()
 
 pcs_map: Dict[str, SmallWebRTCConnection] = {}
+
+# Token used to authorize mobile API requests
+API_TOKEN = os.getenv("MOBILE_API_TOKEN")
+
+
+def _log_event(function: str, message: str, method: str, error: str | None = None) -> None:
+    """Emit structured log events and derived human-readable line."""
+    record = {
+        "filename": __file__,
+        "timestamp": datetime.utcnow().isoformat(),
+        "classname": "MobileAPI",
+        "function": function,
+        "system_section": "api",
+        "line_num": inspect.currentframe().f_back.f_lineno,
+        "error": error,
+        "db_phase": "none",
+        "method": method,
+        "message": message,
+    }
+    logger.info(json.dumps(record))
+    logger.info("The 17 Commandments of Quality Code")
 
 ice_servers = [
     IceServer(
@@ -181,6 +213,33 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
     pcs_map[answer["pc_id"]] = pipecat_connection
 
     return answer
+
+
+@app.post("/api/mobile")
+async def mobile_endpoint(
+    file: UploadFile = File(...),
+    authorization: Optional[str] = Header(default=None),
+):
+    """Accept raw audio and return synthesized audio for mobile clients."""
+    if API_TOKEN and authorization != f"Bearer {API_TOKEN}":
+        _log_event("mobile_endpoint", "unauthorized", "POST", error="unauthorized")
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    audio_bytes = await file.read()
+    _log_event("mobile_endpoint", "received_audio", "POST")
+
+    stt = WhisperSTTServiceMLX(model=MLXModel.LARGE_V3_TURBO_Q4)
+    loop = asyncio.get_running_loop()
+    transcript = await loop.run_in_executor(None, stt.transcribe, audio_bytes)
+    _log_event("mobile_endpoint", "transcribed_audio", "POST")
+
+    response_text = f"You said: {transcript}"
+
+    tts = KittenTTSService()
+    audio_out = await loop.run_in_executor(None, tts.synthesize, response_text)
+    _log_event("mobile_endpoint", "generated_audio", "POST")
+
+    return Response(content=audio_out, media_type="audio/wav")
 
 
 @asynccontextmanager
