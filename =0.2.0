@@ -1,0 +1,6 @@
+Collecting mlx-audio
+  Using cached mlx_audio-0.2.4-py3-none-any.whl.metadata (8.5 kB)
+Downloading mlx_audio-0.2.4-py3-none-any.whl (1.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.1/1.1 MB 22.2 MB/s  0:00:00
+Installing collected packages: mlx-audio
+Successfully installed mlx-audio-0.2.4
