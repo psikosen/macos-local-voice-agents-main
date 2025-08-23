@@ -1,6 +1,5 @@
 # Local voice agents on macOS with Pipecat
-
-![screenshot](assets/debug-console-screenshot.png)
+ 
 
 Pipecat is an open-source, vendor-neutral framework for building real-time voice (and video) AI applications.
 
