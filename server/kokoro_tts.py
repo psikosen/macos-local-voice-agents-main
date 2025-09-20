@@ -21,6 +21,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.services.tts_service import TTSService
 from pipecat.utils.tracing.service_decorators import traced_tts
+from .audio_utils import ensure_pcm16
 
 
 class KokoroTTSService(TTSService):
@@ -112,6 +113,7 @@ class KokoroTTSService(TTSService):
             # MLX audio returns float32 normalized audio
             audio_int16 = (audio_np * 32767).astype(np.int16)
             audio_bytes = audio_int16.tobytes()
+            audio_bytes = ensure_pcm16(audio_bytes, self.sample_rate)
 
             return audio_bytes
 
