@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:http/http.dart' as http;
@@ -18,100 +19,350 @@ class MyApp extends StatefulWidget {
 
 class _MyAppState extends State<MyApp> {
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
+  final TextEditingController _offerUrlController = TextEditingController();
+
   RTCPeerConnection? _pc;
   MediaStream? _localStream;
+  MediaStream? _remoteStream;
   String? _pcId;
+  bool _isConnecting = false;
+  bool _connected = false;
+  String _status = 'Idle';
+  RTCIceConnectionState? _iceConnectionState;
 
   @override
   void initState() {
     super.initState();
     _remoteRenderer.initialize();
+    _offerUrlController.text = _defaultOfferUrl;
   }
 
   @override
   void dispose() {
-    _pc?.close();
+    _offerUrlController.dispose();
     _remoteRenderer.dispose();
     _localStream?.dispose();
+    _remoteStream?.dispose();
+    _pc?.close();
     super.dispose();
   }
 
-  Future<void> _start() async {
-    logEvent('_start', 'creating peer connection');
-    final pc = await createPeerConnection({
-      'iceServers': [
-        {'urls': 'stun:stun.l.google.com:19302'}
-      ]
-    });
-    final stream = await navigator.mediaDevices.getUserMedia({'audio': true});
-    for (var track in stream.getTracks()) {
-      pc.addTrack(track, stream);
+  String get _defaultOfferUrl {
+    const defaultUrl = 'http://localhost:7860/api/offer';
+    if (kIsWeb) {
+      return defaultUrl;
     }
-    pc.onTrack = (event) {
-      if (event.streams.isNotEmpty) {
-        _remoteRenderer.srcObject = event.streams[0];
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        return 'http://10.0.2.2:7860/api/offer';
+      case TargetPlatform.iOS:
+        return 'http://127.0.0.1:7860/api/offer';
+      default:
+        return defaultUrl;
+    }
+  }
+
+  Future<void> _start() async {
+    if (_isConnecting) {
+      return;
+    }
+    await _stop(clearPcId: true);
+
+    setState(() {
+      _isConnecting = true;
+      _status = 'Requesting microphone…';
+      _connected = false;
+      _iceConnectionState = null;
+    });
+    logEvent('_start', 'initializing peer connection');
+
+    try {
+      final pc = await createPeerConnection({
+        'sdpSemantics': 'unified-plan',
+        'iceServers': [
+          {'urls': 'stun:stun.l.google.com:19302'}
+        ],
+      });
+      _pc = pc;
+
+      final stream = await navigator.mediaDevices.getUserMedia({
+        'audio': {
+          'echoCancellation': true,
+          'noiseSuppression': true,
+          'autoGainControl': true,
+        },
+      });
+      _localStream = stream;
+      for (final track in stream.getTracks()) {
+        await pc.addTrack(track, stream);
       }
-    };
+      _updateStatus('Waiting for remote audio…');
 
-    _pc = pc;
-    _localStream = stream;
+      pc.onIceConnectionState = (state) {
+        setState(() {
+          _iceConnectionState = state;
+        });
+        logEvent('onIceConnectionState', 'state=${state?.name}');
+      };
 
-    final offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await _waitForIceGatheringComplete(pc);
+      pc.onConnectionState = (state) {
+        logEvent('onConnectionState', 'state=${state?.name}');
+        if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+          _handleError('Peer connection failed');
+        }
+      };
 
-    final localDesc = await pc.getLocalDescription();
-    final response = await http.post(
-      Uri.parse('http://localhost:7860/api/offer'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'sdp': localDesc?.sdp,
-        'type': localDesc?.type,
-        if (_pcId != null) 'pc_id': _pcId,
-      }),
-    );
+      pc.onIceCandidate = (candidate) {
+        if (candidate == null) {
+          return;
+        }
+        logEvent('onIceCandidate', 'candidate=${candidate.toMap()}');
+      };
 
-    final answer = jsonDecode(response.body) as Map<String, dynamic>;
-    _pcId = answer['pc_id'] as String?;
-    await pc.setRemoteDescription(
-      RTCSessionDescription(
-        answer['sdp'] as String,
-        answer['type'] as String,
-      ),
-    );
-    logEvent('_start', 'connection established');
+      pc.onTrack = (event) async {
+        if (event.track.kind != 'audio') {
+          return;
+        }
+        logEvent('onTrack', 'received remote audio track');
+        MediaStream? remoteStream;
+        if (event.streams.isNotEmpty) {
+          remoteStream = event.streams.first;
+        } else {
+          remoteStream = await createLocalMediaStream('remote');
+          remoteStream.addTrack(event.track);
+        }
+        _remoteStream?.dispose();
+        _remoteStream = remoteStream;
+        _remoteRenderer.srcObject = remoteStream;
+        _updateStatus('Remote audio ready');
+        _setSpeakerphone(true);
+      };
+
+      final offer = await pc.createOffer({
+        'offerToReceiveAudio': 1,
+        'offerToReceiveVideo': 0,
+      });
+      await pc.setLocalDescription(offer);
+      await _waitForIceGatheringComplete(pc);
+
+      final localDescription = pc.localDescription;
+      if (localDescription == null) {
+        throw StateError('Local description missing');
+      }
+
+      final offerUrlRaw = _offerUrlController.text.trim();
+      if (offerUrlRaw.isEmpty) {
+        throw ArgumentError('Offer URL cannot be empty');
+      }
+      final offerUri = Uri.parse(offerUrlRaw);
+      if (!offerUri.hasScheme || offerUri.host.isEmpty) {
+        throw FormatException('Offer URL must include scheme and host');
+      }
+
+      _updateStatus('Sending offer');
+      final response = await http
+          .post(
+            offerUri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'sdp': localDescription.sdp,
+              'type': localDescription.type,
+              if (_pcId != null) 'pc_id': _pcId,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode != 200) {
+        throw Exception(
+          'Offer failed with status ${response.statusCode}: ${response.body}',
+        );
+      }
+
+      final dynamic decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Unexpected answer payload');
+      }
+      final answerSdp = decoded['sdp'] as String?;
+      final answerType = decoded['type'] as String?;
+      final answerPcId = decoded['pc_id'] as String?;
+      if (answerSdp == null || answerType == null || answerPcId == null) {
+        throw const FormatException('Answer missing required fields');
+      }
+
+      _pcId = answerPcId;
+      await pc.setRemoteDescription(
+        RTCSessionDescription(answerSdp, answerType),
+      );
+
+      setState(() {
+        _connected = true;
+        _status = 'Connected';
+      });
+      logEvent('_start', 'connection established (pcId=$_pcId)');
+    } catch (error, stackTrace) {
+      await _stop(clearPcId: true);
+      _handleError(error, stackTrace);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isConnecting = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _stop({bool clearPcId = true}) async {
+    logEvent('_stop', 'closing connection (clearPcId=$clearPcId)');
+    final pc = _pc;
+    _pc = null;
+    try {
+      await pc?.close();
+    } catch (error, stackTrace) {
+      _handleError(error, stackTrace);
+    }
+    await _localStream?.dispose();
+    _localStream = null;
+    await _remoteStream?.dispose();
+    _remoteStream = null;
+    _remoteRenderer.srcObject = null;
+    if (clearPcId) {
+      _pcId = null;
+    }
+    _setSpeakerphone(false);
+    if (mounted) {
+      setState(() {
+        _connected = false;
+        _iceConnectionState = null;
+        _status = 'Idle';
+      });
+    }
   }
 
   Future<void> _waitForIceGatheringComplete(RTCPeerConnection pc) async {
     if (pc.iceGatheringState ==
         RTCIceGatheringState.RTCIceGatheringStateComplete) {
+      logEvent('_waitForIceGatheringComplete', 'already complete');
       return;
     }
     final completer = Completer<void>();
     pc.onIceGatheringState = (state) {
-      if (state == RTCIceGatheringState.RTCIceGatheringStateComplete) {
+      logEvent('onIceGatheringState', 'state=${state.name}');
+      if (state == RTCIceGatheringState.RTCIceGatheringStateComplete &&
+          !completer.isCompleted) {
         completer.complete();
       }
     };
-    return completer.future;
+    await completer.future.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        if (!completer.isCompleted) {
+          logEvent('_waitForIceGatheringComplete', 'timeout waiting for ICE');
+          completer.complete();
+        }
+        return;
+      },
+    );
+  }
+
+  void _updateStatus(String status) {
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _status = status;
+    });
+    logEvent('_updateStatus', status);
+  }
+
+  void _handleError(Object error, [StackTrace? stackTrace]) {
+    logEvent('_handleError', error.toString(), error: error);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _connected = false;
+      _isConnecting = false;
+      _status = 'Error';
+    });
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger != null) {
+      messenger.showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    }
+    if (stackTrace != null) {
+      debugPrintStack(stackTrace: stackTrace, label: 'WebRTC error');
+    }
+  }
+
+  void _setSpeakerphone(bool enabled) {
+    unawaited(Helper.setSpeakerphoneOn(enabled).catchError((error, stackTrace) {
+      logEvent('_setSpeakerphone', 'failed to set speakerphone: $error', error: error);
+      if (stackTrace is StackTrace) {
+        debugPrintStack(stackTrace: stackTrace, label: 'Speakerphone failure');
+      }
+    }));
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       home: Scaffold(
-        appBar: AppBar(title: const Text('Flutter WebRTC')),
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Text('Tap to connect to /api/offer'),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _start,
-                child: const Text('Connect'),
-              ),
-            ],
+        appBar: AppBar(title: const Text('Flutter WebRTC Client')),
+        body: GestureDetector(
+          onTap: () => FocusScope.of(context).unfocus(),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: _offerUrlController,
+                  decoration: const InputDecoration(
+                    labelText: 'Offer endpoint',
+                    hintText: 'http://10.0.2.2:7860/api/offer',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.url,
+                  enabled: !_isConnecting && !_connected,
+                ),
+                const SizedBox(height: 16),
+                if (_isConnecting) const LinearProgressIndicator(),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: _isConnecting
+                            ? null
+                            : _connected
+                                ? () => _stop(clearPcId: true)
+                                : _start,
+                        icon: Icon(_connected ? Icons.stop : Icons.play_arrow),
+                        label:
+                            Text(_connected ? 'Disconnect' : 'Connect to /api/offer'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Text('Status: $_status'),
+                if (_iceConnectionState != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'ICE state: ${_iceConnectionState!.name}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                const SizedBox(height: 24),
+                const Text('Remote audio'),
+                SizedBox(
+                  height: 1,
+                  width: 1,
+                  child: RTCVideoView(_remoteRenderer),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -119,7 +370,7 @@ class _MyAppState extends State<MyApp> {
   }
 }
 
-void logEvent(String function, String message) {
+void logEvent(String function, String message, {Object? error}) {
   final log = {
     'filename': 'lib/main.dart',
     'timestamp': DateTime.now().toIso8601String(),
@@ -127,7 +378,7 @@ void logEvent(String function, String message) {
     'function': function,
     'system_section': 'webrtc',
     'line_num': 0,
-    'error': null,
+    'error': error?.toString(),
     'db_phase': 'none',
     'method': 'NONE',
     'message': message,
