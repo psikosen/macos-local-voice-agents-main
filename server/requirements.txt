@@ -10,5 +10,8 @@ nltk
 kittentts>=0.1.0
 soundfile
 huggingface_hub
+scipy>=1.11.4
+whispercpp>=0.0.17
+google-cloud-speech>=2.27.0
 
 

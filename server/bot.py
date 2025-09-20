@@ -1,14 +1,9 @@
 import argparse
 import asyncio
 import os
-import sys
 from contextlib import asynccontextmanager
 from typing import Dict
 
-# Add local pipecat to Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "pipecat", "src"))
-
-from kokoro_tts import KokoroTTSService
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI
@@ -23,9 +18,10 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.services.openai.llm import OpenAILLMService
-# from kokoro_tts import KokoroTTSService
 from kittentts_service import KittenTTSService
-from pipecat.services.whisper.stt import WhisperSTTServiceMLX, MLXModel
+from kokoro_tts import KokoroTTSService
+from whispercpp_stt_service import WhisperCPPSTTService
+from android_speech_stt_service import AndroidSpeechSTTService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIObserver, RTVIProcessor
 from pipecat.transports.network.small_webrtc import SmallWebRTCTransport
@@ -73,11 +69,25 @@ async def run_bot(webrtc_connection):
         ),
     )
 
-    stt = WhisperSTTServiceMLX(model=MLXModel.LARGE_V3_TURBO_Q4)
+    stt_engine = os.getenv("STT_ENGINE", "whispercpp").lower()
+    if stt_engine == "android":
+        stt = AndroidSpeechSTTService(
+            os.getenv("ANDROID_SPEECH_CREDENTIALS")
+        )
+    else:
+        model_path = os.getenv("WHISPERCPP_MODEL", "ggml-base.en.bin")
+        stt = WhisperCPPSTTService(model_path=model_path)
 
-    #tts = KokoroTTSService(model="prince-canuma/Kokoro-82M", voice="af_heart", sample_rate=24000)
-    # Process-isolated version to avoid Metal assertion failures (now refactored to use standalone worker)
-    tts = KittenTTSService()
+    tts_engine = os.getenv("TTS_ENGINE", "kitten").lower()
+    if tts_engine == "kokoro":
+        tts = KokoroTTSService(
+            model=os.getenv("KOKORO_MODEL", "prince-canuma/Kokoro-82M"),
+            voice=os.getenv("KOKORO_VOICE", "af_heart"),
+            sample_rate=24000,
+        )
+    else:
+        # Process-isolated version to avoid Metal assertion failures (now refactored to use standalone worker)
+        tts = KittenTTSService()
 
     llm = OpenAILLMService(
         api_key="not-needed",  # Ollama doesn't require API key

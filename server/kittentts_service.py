@@ -22,6 +22,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.services.tts_service import TTSService
 from pipecat.utils.tracing.service_decorators import traced_tts
+from .audio_utils import ensure_pcm16
 
 
 class KittenTTSService(TTSService):
@@ -209,7 +210,7 @@ class KittenTTSService(TTSService):
             # Ensure audio is 1D array
             if len(audio_array.shape) > 1:
                 audio_array = audio_array.squeeze()
-            
+
             # Normalize and convert to 16-bit PCM
             # KittenTTS typically returns normalized float32 audio
             if audio_array.dtype == np.float32 or audio_array.dtype == np.float64:
@@ -220,9 +221,10 @@ class KittenTTSService(TTSService):
             else:
                 # Already in int16 format
                 audio_int16 = audio_array.astype(np.int16)
-            
+
             audio_bytes = audio_int16.tobytes()
-            
+            audio_bytes = ensure_pcm16(audio_bytes, self.sample_rate)
+
             logger.debug(f"Generated {len(audio_bytes)} bytes of audio")
             return audio_bytes
             
