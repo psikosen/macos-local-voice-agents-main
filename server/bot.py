@@ -1,70 +1,153 @@
 import argparse
 import asyncio
+import inspect
+import io
+import json
 import os
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Dict
 
 # Add local pipecat to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "pipecat", "src"))
 
-from kokoro_tts import KokoroTTSService
-import uvicorn
-from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI
-from loguru import logger
+import numpy as np  # noqa: E402
+import soundfile as sf  # noqa: E402
+import uvicorn  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
+from fastapi import BackgroundTasks, FastAPI, File, UploadFile  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import StreamingResponse  # noqa: E402
+from loguru import logger  # noqa: E402
 
-from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-from pipecat.audio.turn.smart_turn.local_smart_turn_v2 import LocalSmartTurnAnalyzerV2
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
-from pipecat.services.openai.llm import OpenAILLMService
-# from kokoro_tts import KokoroTTSService
-from kittentts_service import KittenTTSService
-from pipecat.services.whisper.stt import WhisperSTTServiceMLX, MLXModel
-from pipecat.transports.base_transport import TransportParams
-from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIObserver, RTVIProcessor
-from pipecat.transports.network.small_webrtc import SmallWebRTCTransport
-from pipecat.transports.network.webrtc_connection import IceServer, SmallWebRTCConnection
-from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
+from pipecat.audio.turn.smart_turn.base_smart_turn import (  # noqa: E402
+    SmartTurnParams,
+)
+from pipecat.audio.turn.smart_turn.local_smart_turn_v2 import (  # noqa: E402
+    LocalSmartTurnAnalyzerV2,
+)
+from pipecat.audio.vad.silero import SileroVADAnalyzer  # noqa: E402
+from pipecat.audio.vad.vad_analyzer import VADParams  # noqa: E402
+from pipecat.pipeline.pipeline import Pipeline  # noqa: E402
+from pipecat.pipeline.runner import PipelineRunner  # noqa: E402
+from pipecat.pipeline.task import PipelineParams, PipelineTask  # noqa: E402
+from pipecat.processors.aggregators.openai_llm_context import (  # noqa: E402
+    OpenAILLMContext,
+)
+from pipecat.services.openai.llm import OpenAILLMService  # noqa: E402
+from kittentts_service import KittenTTSService  # noqa: E402
+from simple_tts import SimpleTTSService  # noqa: E402
+from pipecat.frames.frames import (  # noqa: E402
+    TTSAudioRawFrame,
+    TranscriptionFrame,
+)
+from pipecat.services.whisper.stt import (  # noqa: E402
+    MLXModel,
+    WhisperSTTServiceMLX,
+)
+from pipecat.transports.base_transport import TransportParams  # noqa: E402
+from pipecat.processors.frameworks.rtvi import (  # noqa: E402
+    RTVIConfig,
+    RTVIObserver,
+    RTVIProcessor,
+)
+from pipecat.transports.network.small_webrtc import (  # noqa: E402
+    SmallWebRTCTransport,
+)
+from pipecat.transports.network.webrtc_connection import (  # noqa: E402
+    IceServer,
+    SmallWebRTCConnection,
+)
+from pipecat.processors.aggregators.llm_response import (  # noqa: E402
+    LLMUserAggregatorParams,
+)
 
 
 load_dotenv(override=True)
 
 app = FastAPI()
 
+origins = os.getenv("CORS_ORIGINS", "*").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 pcs_map: Dict[str, SmallWebRTCConnection] = {}
 
-ice_servers = [
-    IceServer(
-        urls="stun:stun.l.google.com:19302",
-    )
-]
+
+def load_ice_servers() -> list[IceServer]:
+    env = os.getenv("ICE_SERVERS")
+    if env:
+        try:
+            servers = json.loads(env)
+            return [IceServer(**s) for s in servers]
+        except Exception as e:
+            logger.error(f"Invalid ICE_SERVERS: {e}")
+    return [
+        IceServer(urls="stun:stun.l.google.com:19302"),
+        IceServer(
+            urls=os.getenv(
+                "TURN_SERVER_URL", "turn:global.relay.metered.ca:80"
+            ),
+            username=os.getenv(
+                "TURN_SERVER_USERNAME", "openrelayproject"
+            ),
+            credential=os.getenv(
+                "TURN_SERVER_PASSWORD", "openrelayproject"
+            ),
+        ),
+    ]
+
+
+ice_servers = load_ice_servers()
 
 
 SYSTEM_INSTRUCTION = """
 "You are Pipecat, a friendly, helpful chatbot.
 
-Your input is text transcribed in realtime from the user's voice. There may be transcription errors. Adjust your responses automatically to account for these errors.
+Your input is text transcribed in realtime from the user's voice.
+There may be transcription errors. Adjust your responses automatically
+to account for these errors.
 
-Your output will be converted to audio so don't include special characters in your answers and do not use any markdown or special formatting.
+Your output will be converted to audio so don't include special
+characters in your answers and do not use any markdown or special
+formatting.
 
-Respond to what the user said in a creative and helpful way. Keep your responses brief unless you are explicitly asked for long or detailed responses. Normally you should use one or two sentences at most. Keep each sentence short. Prefer simple sentences. Try not to use long sentences with multiple comma clauses.
+Respond to what the user said in a creative and helpful way.
+Keep your responses brief unless you are explicitly asked for long or
+detailed responses. Normally you should use one or two sentences at
+most. Keep each sentence short. Prefer simple sentences. Try not to use
+long sentences with multiple comma clauses.
 
-Start the conversation by saying, "Hello, I'm Pipecat!" Then stop and wait for the user.
+Start the conversation by saying, "Hello, I'm Pipecat!" Then stop and
+wait for the user.
 """
 
 
 async def run_bot(webrtc_connection):
+    mobile_bandwidth = os.getenv("MOBILE_BANDWIDTH", "0") == "1"
+    mobile_latency = os.getenv("MOBILE_LATENCY", "0") == "1"
+
     transport = SmallWebRTCTransport(
         webrtc_connection=webrtc_connection,
         params=TransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
+            audio_in_sample_rate=(
+                16000 if mobile_bandwidth else 24000
+            ),
+            audio_out_sample_rate=(
+                16000 if mobile_bandwidth else 24000
+            ),
+            audio_out_bitrate=(
+                32000 if mobile_bandwidth else 64000
+            ),
+            audio_out_10ms_chunks=mobile_latency,
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
             turn_analyzer=LocalSmartTurnAnalyzerV2(
                 smart_turn_model_path="",  # Download from HuggingFace
@@ -73,17 +156,26 @@ async def run_bot(webrtc_connection):
         ),
     )
 
-    stt = WhisperSTTServiceMLX(model=MLXModel.LARGE_V3_TURBO_Q4)
+    stt = WhisperSTTServiceMLX(
+        model=MLXModel.LARGE_V3_TURBO_Q4
+    )
 
-    #tts = KokoroTTSService(model="prince-canuma/Kokoro-82M", voice="af_heart", sample_rate=24000)
-    # Process-isolated version to avoid Metal assertion failures (now refactored to use standalone worker)
+    # tts = KokoroTTSService(
+    #     model="prince-canuma/Kokoro-82M",
+    #     voice="af_heart",
+    #     sample_rate=24000,
+    # )
+    # Process-isolated version to avoid Metal assertion failures
+    # (now refactored to use standalone worker)
     tts = KittenTTSService()
 
     llm = OpenAILLMService(
         api_key="not-needed",  # Ollama doesn't require API key
         model="gemma3:270m",  # Medium-sized model. Uses ~8.5GB of RAM.
-        # model="mlx-community/Qwen3-235B-A22B-Instruct-2507-3bit-DWQ", # Large model. Uses ~110GB of RAM!
-        base_url="http://127.0.0.1:11434/v1",  # Ollama OpenAI-compatible endpoint
+        # model="mlx-community/Qwen3-235B-A22B-Instruct-2507-3bit-DWQ",
+        # Large model. Uses ~110GB of RAM!
+        base_url="http://127.0.0.1:11434/v1",
+        # Ollama OpenAI-compatible endpoint
         max_tokens=4096,
     )
 
@@ -97,10 +189,10 @@ async def run_bot(webrtc_connection):
     )
     context_aggregator = llm.create_context_aggregator(
         context,
-        # Whisper local service isn't streaming, so it delivers the full text all at
-        # once, after the UserStoppedSpeaking frame. Set aggregation_timeout to a
-        # a de minimus value since we don't expect any transcript aggregation to be
-        # necessary.
+        # Whisper local service isn't streaming, so it delivers the full text
+        # all at once, after the UserStoppedSpeaking frame. Set
+        # aggregation_timeout to a de minimus value since we don't expect any
+        # transcript aggregation to be necessary.
         user_params=LLMUserAggregatorParams(aggregation_timeout=0.05),
     )
 
@@ -135,7 +227,9 @@ async def run_bot(webrtc_connection):
     async def on_client_ready(rtvi):
         await rtvi.set_bot_ready()
         # Kick off the conversation
-        await task.queue_frames([context_aggregator.user().get_context_frame()])
+        await task.queue_frames(
+            [context_aggregator.user().get_context_frame()]
+        )
 
     @transport.event_handler("on_first_participant_joined")
     async def on_first_participant_joined(transport, participant):
@@ -166,11 +260,19 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
         )
     else:
         pipecat_connection = SmallWebRTCConnection(ice_servers)
-        await pipecat_connection.initialize(sdp=request["sdp"], type=request["type"])
+        await pipecat_connection.initialize(
+            sdp=request["sdp"],
+            type=request["type"],
+        )
 
         @pipecat_connection.event_handler("closed")
-        async def handle_disconnected(webrtc_connection: SmallWebRTCConnection):
-            logger.info(f"Discarding peer connection for pc_id: {webrtc_connection.pc_id}")
+        async def handle_disconnected(
+            webrtc_connection: SmallWebRTCConnection,
+        ):
+            logger.info(
+                "Discarding peer connection for pc_id: "
+                f"{webrtc_connection.pc_id}"
+            )
             pcs_map.pop(webrtc_connection.pc_id, None)
 
         # Run example function with SmallWebRTC transport arguments.
@@ -181,6 +283,84 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
     pcs_map[answer["pc_id"]] = pipecat_connection
 
     return answer
+
+
+@app.post("/api/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)):
+    audio_bytes = await file.read()
+    data, _ = sf.read(io.BytesIO(audio_bytes), dtype="int16")
+    if len(data.shape) > 1:
+        data = data.mean(axis=1)
+    pcm_bytes = data.tobytes()
+    stt = WhisperSTTServiceMLX(model=MLXModel.LARGE_V3_TURBO_Q4)
+    text = ""
+    async for frame in stt.run_stt(pcm_bytes):
+        if isinstance(frame, TranscriptionFrame):
+            text += frame.text
+    log_event = {
+        "filename": __file__,
+        "timestamp": datetime.utcnow().isoformat(),
+        "classname": "APIServer",
+        "function": "transcribe_audio",
+        "system_section": "stt",
+        "line_num": inspect.currentframe().f_lineno,
+        "error": "",
+        "db_phase": "none",
+        "method": "POST",
+        "message": "transcription completed",
+    }
+    logger.info(log_event)
+    logger.info("[The 17 Commandments of Quality Code]")
+    return {"text": text.strip() if text else ""}
+
+
+@app.post("/api/tts")
+async def tts_endpoint(request: dict):
+    text = request.get("text", "")
+    tts = KittenTTSService()
+    audio_bytes = b""
+    async for frame in tts.run_tts(text):
+        if isinstance(frame, TTSAudioRawFrame):
+            audio_bytes += frame.audio
+    sample_rate = tts.sample_rate
+    if not audio_bytes or sample_rate <= 0:
+        logger.error("KittenTTS failed, using SimpleTTS fallback")
+        tts_fallback = SimpleTTSService()
+        audio_bytes = b""
+        async for frame in tts_fallback.run_tts(text):
+            if isinstance(frame, TTSAudioRawFrame):
+                audio_bytes += frame.audio
+        sample_rate = tts_fallback.sample_rate
+    if not audio_bytes or sample_rate <= 0:
+        duration = 1.0
+        frequency = 440.0
+        t = np.linspace(0, duration, int(24000 * duration), False)
+        tone = (np.sin(2 * np.pi * frequency * t) * 0.3).astype(np.int16)
+        audio_bytes = tone.tobytes()
+        sample_rate = 24000
+    buf = io.BytesIO()
+    sf.write(
+        buf,
+        np.frombuffer(audio_bytes, dtype=np.int16),
+        sample_rate,
+        format="WAV",
+    )
+    buf.seek(0)
+    log_event = {
+        "filename": __file__,
+        "timestamp": datetime.utcnow().isoformat(),
+        "classname": "APIServer",
+        "function": "tts_endpoint",
+        "system_section": "tts",
+        "line_num": inspect.currentframe().f_lineno,
+        "error": "",
+        "db_phase": "none",
+        "method": "POST",
+        "message": "tts generated",
+    }
+    logger.info(log_event)
+    logger.info("[The 17 Commandments of Quality Code]")
+    return StreamingResponse(buf, media_type="audio/wav")
 
 
 @asynccontextmanager
@@ -194,10 +374,15 @@ async def lifespan(app: FastAPI):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pipecat Bot Runner")
     parser.add_argument(
-        "--host", default="localhost", help="Host for HTTP server (default: localhost)"
+        "--host",
+        default="localhost",
+        help="Host for HTTP server (default: localhost)",
     )
     parser.add_argument(
-        "--port", type=int, default=7860, help="Port for HTTP server (default: 7860)"
+        "--port",
+        type=int,
+        default=7860,
+        help="Port for HTTP server (default: 7860)",
     )
     args = parser.parse_args()
 
