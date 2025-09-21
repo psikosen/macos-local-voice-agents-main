@@ -93,6 +93,17 @@ setup_node_env() {
     print_success "Node.js environment setup complete"
 }
 
+# Ensure required models are downloaded and cached
+ensure_models() {
+    print_status "Ensuring required models are cached..."
+    mkdir -p logs
+    if python server/download_kittentts_model.py >> logs/model_download.log 2>&1; then
+        print_success "Model cache ready"
+    else
+        print_warning "Model download failed; see logs/model_download.log"
+    fi
+}
+
 # Function to start the server
 start_server() {
     print_status "Starting server on port 7860..."
@@ -218,7 +229,10 @@ main() {
     # Setup environments
     setup_python_env
     setup_node_env
-    
+
+    # Ensure required models are downloaded
+    ensure_models
+
     # Start services
     if start_server; then
         print_status "Server startup completed"

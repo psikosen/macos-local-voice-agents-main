@@ -6,6 +6,21 @@ Pipecat is an open-source, vendor-neutral framework for building real-time voice
 
 On an M-series Mac, you can achieve voice-to-voice latency of <800ms with relatively strong models and natural-sounding speech output.
 
+## 🖥️ Hardware Prerequisites
+
+- Apple Silicon Mac (M1 or later recommended)
+- At least 4 CPU cores and 4GB of free RAM
+- ~10GB of disk space for model caching
+
+## 🔧 Installation
+
+```bash
+git clone <repository-url>
+cd macos-local-voice-agents-main
+chmod +x *.sh
+./start.sh  # installs dependencies and downloads models
+```
+
 ## 🚀 Quick Start
 
 ### 📋 **Script Usage Order**
