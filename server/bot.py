@@ -1,12 +1,15 @@
 import argparse
 import asyncio
+import inspect
 import json
 import os
+import platform
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
+from functools import lru_cache
 from typing import Dict, Optional
-import inspect
+from threading import Lock
 
 # Add local pipecat to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "pipecat", "src"))
@@ -36,7 +39,18 @@ from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.services.openai.llm import OpenAILLMService
 # from kokoro_tts import KokoroTTSService
 from kittentts_service import KittenTTSService
-from pipecat.services.whisper.stt import WhisperSTTServiceMLX, MLXModel
+# Pipecat Whisper services are platform specific. Import the module and
+# introspect the available backends instead of importing symbols directly so
+# we can gracefully degrade when MLX isn't present (e.g., on Linux).
+try:
+    from pipecat.services.whisper import stt as whisper_stt
+except ImportError:  # pragma: no cover - handled at runtime
+    whisper_stt = None
+
+WhisperSTTServiceMLX = getattr(whisper_stt, "WhisperSTTServiceMLX", None) if whisper_stt else None
+MLXModel = getattr(whisper_stt, "MLXModel", None) if whisper_stt else None
+WhisperSTTService = getattr(whisper_stt, "WhisperSTTService", None) if whisper_stt else None
+ModelSize = getattr(whisper_stt, "ModelSize", None) if whisper_stt else None
 from pipecat.transports.base_transport import TransportParams
 from pipecat.processors.frameworks.rtvi import RTVIConfig, RTVIObserver, RTVIProcessor
 from pipecat.transports.network.small_webrtc import SmallWebRTCTransport
@@ -52,6 +66,84 @@ pcs_map: Dict[str, SmallWebRTCConnection] = {}
 
 # Token used to authorize mobile API requests
 API_TOKEN = os.getenv("MOBILE_API_TOKEN")
+
+
+def _preferred_model_size():
+    """Select the best available Whisper model for the current platform."""
+    if not ModelSize:
+        return None
+
+    for candidate in (
+        "LARGE_V3_TURBO_Q4",
+        "LARGE_V3_TURBO",
+        "LARGE_V3",
+        "LARGE_V2",
+        "MEDIUM",
+    ):
+        if hasattr(ModelSize, candidate):
+            return getattr(ModelSize, candidate)
+    # Fall back to the smallest defined size if nothing matches our preferred list
+    members = [name for name in dir(ModelSize) if name.isupper()]
+    for member in sorted(members):
+        attr = getattr(ModelSize, member, None)
+        if attr is not None:
+            return attr
+    return None
+
+
+def _build_mlx_stt():
+    if not (WhisperSTTServiceMLX and MLXModel):
+        return None
+
+    if platform.system() != "Darwin":
+        return None
+
+    try:
+        logger.info("Using MLX Whisper STT backend")
+        return WhisperSTTServiceMLX(model=MLXModel.LARGE_V3_TURBO_Q4)
+    except Exception as exc:  # pragma: no cover - depends on MLX runtime
+        logger.warning(f"Unable to initialise MLX Whisper STT: {exc}")
+        return None
+
+
+def _build_generic_stt():
+    if not (WhisperSTTService and ModelSize):
+        return None
+
+    model_size = _preferred_model_size()
+    if not model_size:
+        return None
+
+    logger.info("Using Faster Whisper STT backend")
+    return WhisperSTTService(model=model_size)
+
+
+def _create_stt_service():
+    """Instantiate an STT service compatible with the current platform."""
+
+    stt_instance = _build_mlx_stt()
+    if stt_instance:
+        return stt_instance
+
+    stt_instance = _build_generic_stt()
+    if stt_instance:
+        return stt_instance
+
+    raise RuntimeError(
+        "No compatible Whisper STT backend available. "
+        "Install pipecat-ai with either the mlx-whisper extra (macOS) or "
+        "the faster-whisper extra (Linux/Windows)."
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_cached_stt_service():
+    """Return a cached STT service for reuse in synchronous endpoints."""
+
+    return _create_stt_service()
+
+
+_STT_TRANSCRIBE_LOCK = Lock()
 
 
 def _log_event(function: str, message: str, method: str, error: str | None = None) -> None:
@@ -105,7 +197,11 @@ async def run_bot(webrtc_connection):
         ),
     )
 
-    stt = WhisperSTTServiceMLX(model=MLXModel.LARGE_V3_TURBO_Q4)
+    try:
+        stt = _create_stt_service()
+    except RuntimeError as exc:
+        logger.error(str(exc))
+        raise
 
     #tts = KokoroTTSService(model="prince-canuma/Kokoro-82M", voice="af_heart", sample_rate=24000)
     # Process-isolated version to avoid Metal assertion failures (now refactored to use standalone worker)
@@ -228,9 +324,18 @@ async def mobile_endpoint(
     audio_bytes = await file.read()
     _log_event("mobile_endpoint", "received_audio", "POST")
 
-    stt = WhisperSTTServiceMLX(model=MLXModel.LARGE_V3_TURBO_Q4)
+    try:
+        stt = _get_cached_stt_service()
+    except RuntimeError as exc:
+        _log_event("mobile_endpoint", "stt_unavailable", "POST", error=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc))
     loop = asyncio.get_running_loop()
-    transcript = await loop.run_in_executor(None, stt.transcribe, audio_bytes)
+
+    def _run_transcribe():
+        with _STT_TRANSCRIBE_LOCK:
+            return stt.transcribe(audio_bytes)
+
+    transcript = await loop.run_in_executor(None, _run_transcribe)
     _log_event("mobile_endpoint", "transcribed_audio", "POST")
 
     response_text = f"You said: {transcript}"

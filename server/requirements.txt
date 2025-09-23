@@ -3,12 +3,24 @@ fastapi[all]
 uvicorn
 opencv-python>=4.12.0.88
 numpy>=2.0.0
-mlx-lm>=0.19.0,<0.24.0
-pipecat-ai[openai,deepgram,rime,silero,mlx-whisper]>=0.0.76
 aiortc
 nltk
 kittentts>=0.1.0
 soundfile
 huggingface_hub
+
+# Pipecat core runtime shared across platforms
+pipecat-ai[openai,deepgram,rime,silero]>=0.0.76
+
+# Platform specific backends
+pipecat-ai[mlx-whisper]>=0.0.76; platform_system == "Darwin"
+mlx>=0.25.0; platform_system == "Darwin"
+mlx-lm>=0.19.0,<0.24.0; platform_system == "Darwin"
+mlx-audio==0.2.0; platform_system == "Darwin"
+
+# Linux / cross-platform Whisper backend
+pipecat-ai[faster-whisper]>=0.0.76; platform_system != "Darwin"
+faster-whisper>=1.0.0; platform_system != "Darwin"
+ctranslate2>=4.3; platform_system != "Darwin"
 
 

@@ -73,9 +73,17 @@ def _prepare_env(monkeypatch):
     class _MLXModel:
         LARGE_V3_TURBO_Q4 = object()
 
+    class _ModelSize:
+        LARGE_V3_TURBO_Q4 = object()
+
     stub(
         "pipecat.services.whisper.stt",
-        {"WhisperSTTServiceMLX": object, "MLXModel": _MLXModel},
+        {
+            "WhisperSTTServiceMLX": object,
+            "MLXModel": _MLXModel,
+            "WhisperSTTService": object,
+            "ModelSize": _ModelSize,
+        },
     )
     import server.bot as bot  # noqa
     reload(bot)
@@ -93,7 +101,8 @@ def test_mobile_endpoint_success(monkeypatch):
         def synthesize(self, text):
             return b"audio-bytes"
 
-    monkeypatch.setattr(bot, "WhisperSTTServiceMLX", lambda *a, **k: FakeSTT())
+    monkeypatch.setattr(bot, "_create_stt_service", lambda: FakeSTT())
+    monkeypatch.setattr(bot, "_get_cached_stt_service", lambda: FakeSTT())
     monkeypatch.setattr(bot, "KittenTTSService", lambda *a, **k: FakeTTS())
 
     client = TestClient(bot.app)

@@ -2,7 +2,7 @@
 
 🎙️ **High-quality local voice AI with real speech synthesis**
 
-Pipecat is an open-source, vendor-neutral framework for building real-time voice (and video) AI applications. This repository contains a complete voice agent running with all local models on macOS, featuring **KittenTTS** for high-quality speech synthesis.
+Pipecat is an open-source, vendor-neutral framework for building real-time voice (and video) AI applications. This repository contains a complete voice agent running with all local models on macOS and Linux, featuring **KittenTTS** for high-quality speech synthesis.
 
 On an M-series Mac, you can achieve voice-to-voice latency of <800ms with relatively strong models and natural-sounding speech output.
 
@@ -143,9 +143,14 @@ Microphone → WhisperSTT → Ollama LLM → KittenTTS → Speakers
 - **Ollama** or **LM Studio** for LLM
 
 ### System Requirements
-- **macOS** (M-series Mac recommended)
+- **macOS** (M-series Mac recommended) **or Linux** (tested on Ubuntu 22.04)
 - **8GB+ RAM** (16GB recommended)
 - **2GB+ free disk space**
+
+### Linux Setup Notes
+- Ensure build tooling is available: `sudo apt-get install build-essential ffmpeg curl`
+- `start.sh` automatically installs the `faster-whisper` backend on non-macOS platforms.
+- Helper scripts (`start.sh`, `setup_kittentts.sh`, `run_voice_agent.sh`, `quick_fix.sh`) resolve project paths dynamically and now work when invoked from any directory.
 
 ## 📦 Installation
 
