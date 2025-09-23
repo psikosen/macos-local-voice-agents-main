@@ -12,6 +12,7 @@ from kokoro_tts import KokoroTTSService
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
@@ -36,6 +37,27 @@ from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
 load_dotenv(override=True)
 
 app = FastAPI()
+
+# CORS for mobile/webview origins
+origins = [
+    "http://localhost",
+    "http://127.0.0.1",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    # Allow LAN dev access from device
+    # Note: Consider narrowing this to your local subnet if desired
+    "*",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
 
 pcs_map: Dict[str, SmallWebRTCConnection] = {}
 
