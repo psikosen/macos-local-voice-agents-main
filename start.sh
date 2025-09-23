@@ -1,11 +1,30 @@
 #!/bin/bash
 
+# Exit immediately on unbound variables
+set -u
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# Detect host operating system
+OS_NAME="$(uname -s)"
+IS_MAC=false
+IS_LINUX=false
+case "$OS_NAME" in
+    Darwin)
+        IS_MAC=true
+        ;;
+    Linux)
+        IS_LINUX=true
+        ;;
+esac
+
+SERVER_PID=""
+CLIENT_PID=""
 
 # Function to print colored output
 print_status() {
@@ -31,15 +50,26 @@ command_exists() {
 
 # Function to check if port is in use
 port_in_use() {
-    lsof -i :$1 >/dev/null 2>&1
+    local port=$1
+    if command_exists lsof; then
+        lsof -i :"$port" >/dev/null 2>&1
+    elif command_exists ss; then
+        ss -ltn "sport = :$port" >/dev/null 2>&1
+    else
+        return 1
+    fi
 }
 
 # Function to kill process on port
 kill_port() {
     local port=$1
-    if port_in_use $port; then
+    if port_in_use "$port"; then
         print_warning "Port $port is in use. Attempting to kill existing process..."
-        lsof -ti :$port | xargs kill -9 2>/dev/null
+        if command_exists lsof; then
+            lsof -ti :"$port" | xargs kill -9 2>/dev/null || true
+        elif command_exists fuser; then
+            fuser -k "$port"/tcp 2>/dev/null || true
+        fi
         sleep 2
     fi
 }
@@ -59,28 +89,28 @@ setup_python_env() {
     print_status "Activating virtual environment..."
     source "$venv_dir/bin/activate"
     
-    print_status "Upgrading pip..."
-    pip install --upgrade pip
-    
-    print_status "Installing core dependencies first..."
-    pip install numpy>=2.0.0 torch
-    
+    print_status "Upgrading pip and wheel..."
+    pip install --upgrade pip wheel
+
     print_status "Installing Python dependencies..."
     if pip install -r server/requirements.txt; then
-        print_success "Main dependencies installed successfully"
+        print_success "Python dependencies installed successfully"
     else
-        print_warning "Some dependencies failed, trying alternative approach..."
-        # Install dependencies one by one to identify issues
+        print_warning "Bulk install failed, retrying with common packages..."
         pip install python-dotenv fastapi uvicorn opencv-python nltk aiortc || true
+        pip install -r server/requirements.txt || true
     fi
-    
-    print_status "Installing mlx packages with compatible versions..."
-    pip install "mlx>=0.25.0" "mlx-lm>=0.19.0,<0.24.0" || print_warning "MLX packages installation failed"
-    
-    # Try to install mlx-audio without dependencies to avoid conflicts
-    print_status "Installing mlx-audio (may show warnings)..."
-    pip install mlx-audio==0.2.0 --no-deps || print_warning "mlx-audio installation failed, server may not work fully"
-    
+
+    if $IS_MAC; then
+        print_status "Ensuring MLX runtime is available..."
+        pip install "mlx>=0.25.0" "mlx-lm>=0.19.0,<0.24.0" mlx-audio==0.2.0 --no-deps \
+            || print_warning "MLX packages installation failed; voice quality may be reduced"
+    elif $IS_LINUX; then
+        print_status "Ensuring Linux speech dependencies are available..."
+        pip install "faster-whisper>=1.0.0" "ctranslate2>=4.3" || \
+            print_warning "Could not install faster-whisper; install manually for best accuracy"
+    fi
+
     print_success "Python environment setup complete"
 }
 
@@ -177,12 +207,12 @@ check_services() {
 # Function to cleanup on exit
 cleanup() {
     print_status "Shutting down services..."
-    if [ ! -z "$SERVER_PID" ]; then
-        kill $SERVER_PID 2>/dev/null
+    if [ -n "${SERVER_PID}" ]; then
+        kill "$SERVER_PID" 2>/dev/null || true
         print_status "Server stopped"
     fi
-    if [ ! -z "$CLIENT_PID" ]; then
-        kill $CLIENT_PID 2>/dev/null
+    if [ -n "${CLIENT_PID}" ]; then
+        kill "$CLIENT_PID" 2>/dev/null || true
         print_status "Client stopped"
     fi
     exit 0

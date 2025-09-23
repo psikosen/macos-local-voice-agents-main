@@ -1,34 +1,30 @@
 #!/bin/bash
+set -euo pipefail
 
-# KittenTTS Quick Setup Script
-echo "🎙️ Setting up KittenTTS for macOS Voice Agents..."
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
 
-# Navigate to project directory
-cd /Users/raymondgonzalez/Downloads/macos-local-voice-agents-main
+echo "🎙️ Setting up KittenTTS dependencies from $PROJECT_ROOT"
 
-# Check if virtual environment exists
+cd "$PROJECT_ROOT"
+
 if [ ! -d "venv" ]; then
-    echo "Creating virtual environment..."
+    echo "Creating Python virtual environment..."
     python3 -m venv venv
 fi
 
-# Activate virtual environment
 echo "Activating virtual environment..."
 source venv/bin/activate
 
-# Upgrade pip
-echo "Upgrading pip..."
-pip install --upgrade pip
+echo "Upgrading pip and wheel..."
+pip install --upgrade pip wheel
 
-# Install KittenTTS and dependencies
-echo "Installing KittenTTS and dependencies..."
+echo "Installing KittenTTS and audio dependencies..."
 pip install kittentts soundfile
 
-# Install other requirements
 echo "Installing project requirements..."
 pip install -r server/requirements.txt
 
-# Test KittenTTS
 echo ""
 echo "Testing KittenTTS installation..."
 cd server
