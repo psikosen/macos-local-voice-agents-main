@@ -152,6 +152,17 @@ Microphone → WhisperSTT → Ollama LLM → KittenTTS → Speakers
 - `start.sh` automatically installs the `faster-whisper` backend on non-macOS platforms.
 - Helper scripts (`start.sh`, `setup_kittentts.sh`, `run_voice_agent.sh`, `quick_fix.sh`) resolve project paths dynamically and now work when invoked from any directory.
 
+### Key Python Dependencies
+- **FastAPI 0.110+** (via `fastapi[all]`)
+- **uvicorn 0.30+** for ASGI hosting
+- **pipecat-ai 0.0.76+** with platform extras for Whisper backends
+- **KittenTTS 0.1.0+** for speech synthesis
+- **opencv-python 4.12.0.88+** and **numpy 2.0.0+** for audio pre/post-processing helpers
+- **mlx 0.25.0+** and **mlx-audio 0.2.0** on macOS for MLX Whisper acceleration
+- **faster-whisper 1.0.0+** and **ctranslate2 4.3+** on Linux for optimized transcription
+
+> The full list lives in [`server/requirements.txt`](server/requirements.txt); update the versions there if you upgrade any of the libraries above.
+
 ## 📦 Installation
 
 ### 1. Install Ollama (LLM Server)
@@ -196,6 +207,16 @@ cd macos-local-voice-agents-main
    - Navigate to `http://localhost:3000`
    - Click "Connect" to establish WebRTC connection
    - Start speaking!
+
+### Verifying Your Environment
+
+Before starting the UI you can confirm that critical dependencies are ready:
+
+```bash
+python scripts/verify_startup.py
+```
+
+Run with `--json` for machine-readable output, or `--fail-on-warning` to surface network connectivity warnings (useful in CI).
 
 ### Voice Commands
 

@@ -6,7 +6,7 @@ import os
 import platform
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Dict, Optional
 from threading import Lock
@@ -148,20 +148,24 @@ _STT_TRANSCRIBE_LOCK = Lock()
 
 def _log_event(function: str, message: str, method: str, error: str | None = None) -> None:
     """Emit structured log events and derived human-readable line."""
+
+    caller_frame = inspect.currentframe().f_back
+    line_num = caller_frame.f_lineno if caller_frame else None
     record = {
         "filename": __file__,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "classname": "MobileAPI",
         "function": function,
         "system_section": "api",
-        "line_num": inspect.currentframe().f_back.f_lineno,
+        "line_num": line_num,
         "error": error,
         "db_phase": "none",
         "method": method,
         "message": message,
     }
-    logger.info(json.dumps(record))
-    logger.info("The 17 Commandments of Quality Code")
+    logger.info(json.dumps(record, sort_keys=True))
+    suffix = f" | error={error}" if error else ""
+    logger.info(f"[Continuous skepticism (Sherlock Protocol)] {message}{suffix}")
 
 ice_servers = [
     IceServer(

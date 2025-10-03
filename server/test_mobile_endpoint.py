@@ -1,4 +1,5 @@
 import io
+import json
 import sys
 import types
 import wave
@@ -126,3 +127,88 @@ def test_mobile_endpoint_unauthorized(monkeypatch):
         files={"file": ("sample.wav", audio, "audio/wav")},
     )
     assert response.status_code == 401
+
+
+def test_mobile_endpoint_logs_success_flow(monkeypatch):
+    token, bot = _prepare_env(monkeypatch)
+
+    class FakeSTT:
+        def transcribe(self, audio_bytes):
+            return "hello"
+
+    class FakeTTS:
+        def synthesize(self, text):
+            return b"audio-bytes"
+
+    monkeypatch.setattr(bot, "_create_stt_service", lambda: FakeSTT())
+    monkeypatch.setattr(bot, "_get_cached_stt_service", lambda: FakeSTT())
+    monkeypatch.setattr(bot, "KittenTTSService", lambda *a, **k: FakeTTS())
+
+    events = []
+
+    def _capture(message):
+        events.append(message)
+
+    handler_id = bot.logger.add(_capture, format="{message}")
+    client = TestClient(bot.app)
+    try:
+        response = client.post(
+            "/api/mobile",
+            files={"file": ("sample.wav", _sample_wav_bytes(), "audio/wav")},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    finally:
+        bot.logger.remove(handler_id)
+
+    assert response.status_code == 200
+
+    structured = []
+    derived_lines = []
+    for message in events:
+        text = message.record["message"]
+        if text.startswith("{") and "\"system_section\"" in text:
+            structured.append(json.loads(text))
+        if text.startswith("[Continuous skepticism (Sherlock Protocol)]"):
+            derived_lines.append(text)
+
+    assert {entry["message"] for entry in structured} == {
+        "received_audio",
+        "transcribed_audio",
+        "generated_audio",
+    }
+    assert all(entry["method"] == "POST" for entry in structured)
+    assert all(isinstance(entry["line_num"], int) for entry in structured)
+    assert len(derived_lines) >= 3
+
+
+def test_mobile_endpoint_logs_unauthorized(monkeypatch):
+    token, bot = _prepare_env(monkeypatch)
+
+    events = []
+
+    def _capture(message):
+        events.append(message)
+
+    handler_id = bot.logger.add(_capture, format="{message}")
+    client = TestClient(bot.app)
+    try:
+        response = client.post(
+            "/api/mobile",
+            files={"file": ("sample.wav", _sample_wav_bytes(), "audio/wav")},
+        )
+    finally:
+        bot.logger.remove(handler_id)
+
+    assert response.status_code == 401
+
+    structured = []
+    derived = []
+    for message in events:
+        text = message.record["message"]
+        if text.startswith("{") and "\"error\"" in text:
+            structured.append(json.loads(text))
+        if text.startswith("[Continuous skepticism (Sherlock Protocol)]"):
+            derived.append(text)
+
+    assert any(entry["message"] == "unauthorized" and entry["error"] == "unauthorized" for entry in structured)
+    assert any("error=unauthorized" in line for line in derived)
