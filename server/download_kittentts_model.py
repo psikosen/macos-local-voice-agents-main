@@ -5,10 +5,32 @@ Download and cache KittenTTS models
 
 import os
 import sys
+import json
+import inspect
+from datetime import datetime
 from pathlib import Path
+
+
+def log_event(message: str, error: str | None = None) -> None:
+    """Emit a structured log line and human-readable summary."""
+    record = {
+        "filename": Path(__file__).name,
+        "timestamp": datetime.utcnow().isoformat(),
+        "classname": "KittenTTSDownloader",
+        "function": inspect.stack()[1].function,
+        "system_section": "model_download",
+        "line_num": inspect.stack()[1].lineno,
+        "error": error,
+        "db_phase": "none",
+        "method": "NONE",
+        "message": message,
+    }
+    print(json.dumps(record))
+    print(f"[The 17 Commandments of Quality Code] {message}")
 
 def download_kittentts_models():
     """Download and cache KittenTTS models"""
+    log_event("KittenTTS model download started")
     print("=" * 60)
     print("KittenTTS Model Downloader")
     print("=" * 60)
@@ -39,6 +61,7 @@ def download_kittentts_models():
             cache_dir=str(cache_dir),
             local_dir_use_symlinks=False
         )
+        log_event("Model downloaded", error=None)
         print(f"✓ Model downloaded to: {model_path}")
         
     except ImportError:
@@ -58,17 +81,21 @@ def download_kittentts_models():
                 cache_dir=str(cache_dir),
                 local_dir_use_symlinks=False
             )
+            log_event("Model downloaded", error=None)
             print(f"✓ Model downloaded to: {model_path}")
         except Exception as e:
+            log_event("Failed to download via huggingface_hub", error=str(e))
             print(f"✗ Failed to download via huggingface_hub: {e}")
     
     except Exception as e:
+        log_event("Error downloading model", error=str(e))
         print(f"✗ Error downloading model: {e}")
     
     # Now try to initialize KittenTTS with the model
     print("\nInitializing KittenTTS to verify model...")
     try:
         model = KittenTTS("KittenML/kitten-tts-nano-0.1")
+        log_event("KittenTTS model initialized successfully", error=None)
         print("✓ KittenTTS model initialized successfully!")
         
         # Test generation
@@ -77,6 +104,7 @@ def download_kittentts_models():
         audio = model.generate(test_text, voice="expr-voice-2-f")
         
         if audio is not None and len(audio) > 0:
+            log_event("Audio generated for verification", error=None)
             print(f"✓ Audio generated successfully ({len(audio)} samples)")
             print(f"  Shape: {audio.shape}")
             print(f"  Dtype: {audio.dtype}")
@@ -86,6 +114,7 @@ def download_kittentts_models():
             return False
             
     except Exception as e:
+        log_event("Failed to initialize KittenTTS", error=str(e))
         print(f"✗ Failed to initialize KittenTTS: {e}")
         print("\nTroubleshooting:")
         print("1. Check internet connection")
