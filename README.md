@@ -26,8 +26,10 @@ chmod +x *.sh
 ### 📋 **Script Usage Order**
 
 **First Time Setup:**
-1. **`./setup_kittentts.sh`** - Install KittenTTS dependencies (run once)
-2. **`./start.sh`** - Start the full application
+1. **macOS:** `./setup_mac.sh`
+2. **Linux:** `./setup_linux.sh`
+3. **Optional:** `./setup_kittentts.sh` - deeper KittenTTS diagnostics
+4. **Then:** `./run_mac.sh` or `./run_linux.sh`
 
 **Regular Usage:**
 - **`./start.sh`** - Start everything (server + client)
@@ -41,25 +43,38 @@ chmod +x *.sh
 
 ---
 
-### Option 1: One-Command Setup (Recommended)
+### Option 1: macOS Setup (Recommended)
 ```bash
-# Clone and setup everything automatically
+# Clone and setup everything automatically on macOS
 git clone <repository-url>
 cd macos-local-voice-agents-main
 chmod +x *.sh
-./start.sh
+./setup_mac.sh
+./run_mac.sh
 ```
 
-### Option 2: KittenTTS Quick Start
+### Option 2: Linux Setup (Recommended)
 ```bash
-# For first-time KittenTTS setup
+# Clone and setup everything automatically on Linux
+git clone <repository-url>
+cd macos-local-voice-agents-main
+chmod +x *.sh
+./setup_linux.sh
+./run_linux.sh
+```
+
+### Option 3: KittenTTS Quick Start
+```bash
+# For first-time KittenTTS setup or to diagnose voice synthesis
 ./setup_kittentts.sh
 
-# Then start the agent
-./start.sh
+# Then start the agent after running the OS-specific setup
+./run_mac.sh   # macOS
+# or
+./run_linux.sh # Linux
 ```
 
-### Option 3: Manual Setup
+### Option 4: Manual Setup
 ```bash
 # Setup Python environment
 python3 -m venv venv
