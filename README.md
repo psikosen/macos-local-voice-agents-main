@@ -90,6 +90,33 @@ cd ..
 ./start.sh
 ```
 
+## 📱 Android Setup
+
+### Requirements
+- [Flutter SDK](https://docs.flutter.dev/get-started/install)
+- [Android Studio](https://developer.android.com/studio) with Android SDK tools
+- Verify your environment with `flutter doctor`
+
+### Model Placement
+Place required models (e.g., KittenTTS voices and Whisper STT) in your Flutter project under `android/app/src/main/assets/models/`. Ensure the server-side models are downloaded via `./setup_kittentts.sh` or bundled for offline use.
+
+### Server Configuration
+Configure the app to point to your server's endpoints:
+- WebRTC signaling: `http://<server-ip>:7860/api/offer`
+- LLM API (OpenAI compatible): `http://<server-ip>:11434/v1`
+
+See [Change LLM Model](#change-llm-model) for on-device model options.
+
+### Build
+```bash
+flutter build apk
+```
+Install the generated APK on your device or emulator.
+
+### Troubleshooting
+- **Permissions:** Ensure microphone and network permissions are declared in `AndroidManifest.xml` or grant them manually with `adb shell pm grant <package> android.permission.RECORD_AUDIO`.
+- **Model Downloads:** If model downloads fail, run `./quick_fix.sh` or manually place models in the assets directory.
+
 ## 🎯 Run Modes
 
 ### 1. **Full Stack Mode** (Default)
@@ -380,9 +407,10 @@ pipeline = Pipeline([
 
 1. Fork the repository
 2. Create feature branch: `git checkout -b feature-name`
-3. Commit changes: `git commit -am 'Add feature'`
-4. Push branch: `git push origin feature-name`
-5. Submit pull request
+3. Run checks: `flutter analyze` and `flutter test`
+4. Commit changes: `git commit -am 'Add feature'`
+5. Push branch: `git push origin feature-name`
+6. Submit pull request
 
 ## 📄 License
 
