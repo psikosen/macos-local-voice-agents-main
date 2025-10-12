@@ -14,3 +14,7 @@
 - [x] Emit canonical structured logs with derived skepticism line from the Flutter bridge.
 - [x] Support injectable HTTP clients and robust remote fallback handling in `LlamaBridge`.
 - [x] Expand Flutter unit coverage for remote token streaming and HTTP error surfacing.
+
+## Platform Scripts
+- [x] Provide dedicated macOS setup/run scripts.
+- [x] Provide dedicated Linux setup/run scripts.
