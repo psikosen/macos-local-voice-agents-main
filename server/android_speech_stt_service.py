@@ -43,8 +43,8 @@ class AndroidSpeechSTTService(STTService):
             audio_google = speech.RecognitionAudio(content=audio_norm)
             response = await asyncio.to_thread(
                 self._client.recognize,
-                config,
-                audio_google,
+                config=config,
+                audio=audio_google,
             )
             await self.stop_ttfb_metrics()
             await self.stop_processing_metrics()
