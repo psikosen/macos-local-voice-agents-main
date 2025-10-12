@@ -9,3 +9,8 @@
 ## Remake Tasks
 - [x] Implement cached KittenTTS synthesis for the mobile endpoint with resilient error handling.
 - [x] Add regression tests that validate KittenTTS WAV output and cache behavior.
+
+## LlamaBridge Enhancements
+- [x] Emit canonical structured logs with derived skepticism line from the Flutter bridge.
+- [x] Support injectable HTTP clients and robust remote fallback handling in `LlamaBridge`.
+- [x] Expand Flutter unit coverage for remote token streaming and HTTP error surfacing.
