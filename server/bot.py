@@ -290,7 +290,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
     audio_bytes = await file.read()
     data, _ = sf.read(io.BytesIO(audio_bytes), dtype="int16")
     if len(data.shape) > 1:
-        data = data.mean(axis=1)
+        data = data.mean(axis=1).astype(np.int16)
     pcm_bytes = data.tobytes()
     stt = WhisperSTTServiceMLX(model=MLXModel.LARGE_V3_TURBO_Q4)
     text = ""
