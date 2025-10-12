@@ -88,6 +88,8 @@ def _prepare_env(monkeypatch):
     )
     import server.bot as bot  # noqa
     reload(bot)
+    if hasattr(bot._get_cached_tts_service, "cache_clear"):
+        bot._get_cached_tts_service.cache_clear()
     return token, bot
 
 
@@ -104,7 +106,7 @@ def test_mobile_endpoint_success(monkeypatch):
 
     monkeypatch.setattr(bot, "_create_stt_service", lambda: FakeSTT())
     monkeypatch.setattr(bot, "_get_cached_stt_service", lambda: FakeSTT())
-    monkeypatch.setattr(bot, "KittenTTSService", lambda *a, **k: FakeTTS())
+    monkeypatch.setattr(bot, "_get_cached_tts_service", lambda: FakeTTS())
 
     client = TestClient(bot.app)
     audio = _sample_wav_bytes()
@@ -142,7 +144,7 @@ def test_mobile_endpoint_logs_success_flow(monkeypatch):
 
     monkeypatch.setattr(bot, "_create_stt_service", lambda: FakeSTT())
     monkeypatch.setattr(bot, "_get_cached_stt_service", lambda: FakeSTT())
-    monkeypatch.setattr(bot, "KittenTTSService", lambda *a, **k: FakeTTS())
+    monkeypatch.setattr(bot, "_get_cached_tts_service", lambda: FakeTTS())
 
     events = []
 
@@ -212,3 +214,26 @@ def test_mobile_endpoint_logs_unauthorized(monkeypatch):
 
     assert any(entry["message"] == "unauthorized" and entry["error"] == "unauthorized" for entry in structured)
     assert any("error=unauthorized" in line for line in derived)
+
+
+def test_cached_tts_service_reuses_instance(monkeypatch):
+    token, bot = _prepare_env(monkeypatch)
+
+    created_instances = []
+
+    class _FakeTTS:
+        pass
+
+    def _factory():
+        instance = _FakeTTS()
+        created_instances.append(instance)
+        return instance
+
+    bot._get_cached_tts_service.cache_clear()
+    monkeypatch.setattr(bot, "KittenTTSService", _factory)
+
+    first = bot._get_cached_tts_service()
+    second = bot._get_cached_tts_service()
+
+    assert first is second
+    assert len(created_instances) == 1

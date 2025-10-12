@@ -1,11 +1,14 @@
 import asyncio
 import concurrent.futures
-from typing import AsyncGenerator, Optional
-import numpy as np
-from loguru import logger
+import io
 import os
 import sys
+import wave
 from pathlib import Path
+from typing import AsyncGenerator, Optional
+
+import numpy as np
+from loguru import logger
 
 try:
     from kittentts import KittenTTS
@@ -187,21 +190,29 @@ class KittenTTSService(TTSService):
     def can_generate_metrics(self) -> bool:
         return True
     
-    def _generate_audio_sync(self, text: str) -> bytes:
+    def _generate_audio_sync(self, text: str, *, voice: Optional[str] = None) -> bytes:
         """Synchronously generate audio from text. This runs in a separate thread."""
         try:
             if self._init_future:
                 self._init_future.result()  # Wait for initialization
                 self._init_future = None
-            
+
             if self._model is None:
                 raise ValueError("Model not initialized")
-            
+
+            voice_to_use = voice or self._voice
+            if voice and voice not in self._available_voices:
+                logger.warning(
+                    "Requested voice '%s' not in known voices; attempting generation anyway",
+                    voice,
+                )
+
+            self._settings["voice"] = voice_to_use
             logger.debug(f"Generating audio for: {text}")
-            
+
             # Generate audio using KittenTTS
             # KittenTTS returns a numpy array with audio samples
-            audio_array = self._model.generate(text, voice=self._voice)
+            audio_array = self._model.generate(text, voice=voice_to_use)
             
             if audio_array is None or len(audio_array) == 0:
                 raise ValueError("No audio generated")
@@ -222,13 +233,42 @@ class KittenTTSService(TTSService):
                 audio_int16 = audio_array.astype(np.int16)
             
             audio_bytes = audio_int16.tobytes()
-            
+
             logger.debug(f"Generated {len(audio_bytes)} bytes of audio")
             return audio_bytes
-            
+
         except Exception as e:
             logger.error(f"Error generating audio: {e}")
             raise
+
+    def synthesize(self, text: str, *, voice: Optional[str] = None) -> bytes:
+        """Generate a WAV payload for the provided text.
+
+        Args:
+            text: Text that should be converted to speech.
+            voice: Optional override for the configured voice.
+
+        Returns:
+            Bytes representing a 16-bit mono WAV file at the configured sample rate.
+        """
+
+        if not text or not text.strip():
+            raise ValueError("Text to synthesize must be a non-empty string")
+
+        logger.debug("Synthesizing TTS for %s characters", len(text))
+        pcm_audio = self._generate_audio_sync(text, voice=voice)
+        target_sample_rate = int(
+            self._settings.get("sample_rate") or self.sample_rate or 24000
+        )
+
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)  # 16-bit audio
+            wav_file.setframerate(target_sample_rate)
+            wav_file.writeframes(pcm_audio)
+
+        return buffer.getvalue()
     
     @traced_tts
     async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:

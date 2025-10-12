@@ -146,6 +146,13 @@ def _get_cached_stt_service():
 _STT_TRANSCRIBE_LOCK = Lock()
 
 
+@lru_cache(maxsize=1)
+def _get_cached_tts_service() -> KittenTTSService:
+    """Return a cached KittenTTS service instance for reuse."""
+
+    return KittenTTSService()
+
+
 def _log_event(function: str, message: str, method: str, error: str | None = None) -> None:
     """Emit structured log events and derived human-readable line."""
 
@@ -344,8 +351,18 @@ async def mobile_endpoint(
 
     response_text = f"You said: {transcript}"
 
-    tts = KittenTTSService()
-    audio_out = await loop.run_in_executor(None, tts.synthesize, response_text)
+    try:
+        tts = _get_cached_tts_service()
+    except Exception as exc:  # pragma: no cover - defensive guard for init failures
+        _log_event("mobile_endpoint", "tts_unavailable", "POST", error=str(exc))
+        raise HTTPException(status_code=503, detail="Text-to-speech service unavailable") from exc
+
+    try:
+        audio_out = await loop.run_in_executor(None, tts.synthesize, response_text)
+    except Exception as exc:
+        _log_event("mobile_endpoint", "tts_failure", "POST", error=str(exc))
+        raise HTTPException(status_code=500, detail="Failed to synthesize speech") from exc
+
     _log_event("mobile_endpoint", "generated_audio", "POST")
 
     return Response(content=audio_out, media_type="audio/wav")
